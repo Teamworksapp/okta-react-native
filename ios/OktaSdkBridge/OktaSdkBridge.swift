@@ -49,29 +49,36 @@ protocol StateManagerProtocol: AnyObject {
 }
 
 extension OktaOidcStateManager: StateManagerProtocol {
-    
+    func saveDeviceSecret(_ keychain: DeviceSecretKeychain) {
+        var tokens = ["id_token": self.idToken!]
+
+
+        // Only attempt to save the secret if the response includes a "device_secret" field
+        if let deviceSecret = self.authState.lastTokenResponse!.additionalParameters!["device_secret"] as? String {
+            tokens["device_secret"] = deviceSecret
+        }
+
+        keychain.save(tokens)
+    }
 }
 
 // MARK: - DeviceSecretKeychain
 
-class DeviceSecretKeychain {
-    var service: String
-    var accessGroup: String
-
-    init(service: String, accessGroup: String) {
-        self.service = service
-        self.accessGroup = accessGroup
-    }
+struct DeviceSecretKeychain {
+    let service: String
+    let accessGroup: String
 
     func save(_ tokens: [String: String]) {
-        let query: [String: Any] = [
-            (kSecClass as String): kSecClassGenericPassword,
-            (kSecAttrService as String): service,
-            (kSecAttrAccessGroup as String): self.accessGroup]
-        SecItemDelete(query as CFDictionary)
-
         for (kind, value) in tokens {
-            let attributes: [String: Any] = [
+            let deleteAttributes: [String: Any] = [
+                (kSecClass as String): kSecClassGenericPassword,
+                (kSecAttrService as String): service,
+                (kSecAttrAccessGroup as String): self.accessGroup,
+                (kSecAttrAccount as String): "Okta-\(kind)"
+            ]
+            SecItemDelete(deleteAttributes as CFDictionary)
+
+            let createAttributes: [String: Any] = [
                 (kSecClass as String): kSecClassGenericPassword,
                 (kSecAttrService as String): service,
                 (kSecAttrAccessGroup as String): self.accessGroup,
@@ -79,7 +86,7 @@ class DeviceSecretKeychain {
                 (kSecValueData as String): value.data(using: .utf8)!
             ]
 
-            SecItemAdd(attributes as CFDictionary, nil)
+            SecItemAdd(createAttributes as CFDictionary, nil)
         }
     }
 }
@@ -220,6 +227,8 @@ class OktaSdkBridge: RCTEventEmitter {
             }
             
             currStateManager.writeToSecureStorage()
+            currStateManager.saveDeviceSecret(self.deviceSecretKeychain!)
+
             let result = [
                 OktaSdkConstant.RESOLVE_TYPE_KEY: OktaSdkConstant.AUTHORIZED,
                 OktaSdkConstant.ACCESS_TOKEN_KEY: stateManager?.accessToken
@@ -347,14 +356,7 @@ class OktaSdkBridge: RCTEventEmitter {
             }
             
             currStateManager.writeToSecureStorage()
-
-            // Only use the DeviceSecretKeychain if the response includes a "device_secret" field
-            if let deviceSecret = currStateManager.authState.lastTokenResponse!.additionalParameters!["device_secret"] as? String {
-                self.deviceSecretKeychain!.save([
-                    "id_token": currStateManager.idToken!,
-                    "device_secret": deviceSecret
-                ])
-            }
+            currStateManager.saveDeviceSecret(self.deviceSecretKeychain!)
 
             let dic = [
                 OktaSdkConstant.RESOLVE_TYPE_KEY: OktaSdkConstant.AUTHORIZED,
@@ -496,6 +498,8 @@ class OktaSdkBridge: RCTEventEmitter {
             }
             
             newStateManager.writeToSecureStorage()
+            newStateManager.saveDeviceSecret(self.deviceSecretKeychain!)
+
             let dic = [
                 OktaSdkConstant.ACCESS_TOKEN_KEY: newStateManager.accessToken,
                 OktaSdkConstant.ID_TOKEN_KEY: newStateManager.idToken,
